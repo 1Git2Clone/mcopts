@@ -5,6 +5,11 @@ on:
     branches: ['**']
     paths: ['data/defaults/**', 'game/**', 'tests/fixtures/**']
   workflow_dispatch:
+    inputs:
+      versions:
+        description: Versions to verify, space-separated; empty for all
+        required: false
+        default: ''
 
 concurrency:
   group: mcopts-game
@@ -13,7 +18,8 @@ concurrency:
 jobs:
   verify:
     runs-on: nix
-    timeout-minutes: 60
+    # A full run is ~34 launches on llvmpipe plus a cold 1.6 GB download.
+    timeout-minutes: 180
     env:
       NIX_CONFIG: experimental-features = nix-command flakes
     steps:
@@ -32,8 +38,9 @@ jobs:
         id: select
         env:
           BASE_SHA: ${{ github.event.before }}
+          REQUESTED: ${{ inputs.versions }}
         run: |
-          versions=$(game/changed-versions.sh "$BASE_SHA" "$GITHUB_SHA" | paste -sd' ')
+          versions=${REQUESTED:-$(game/changed-versions.sh "$BASE_SHA" "$GITHUB_SHA" | paste -sd' ')}
           printf 'versions=%s\n' "$versions" >> "$GITHUB_OUTPUT"
           printf 'Selected versions: %s\n' "${versions:-none}"
       - name: Node for the cache action (pinned by flake.lock)
