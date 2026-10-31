@@ -39,8 +39,9 @@ jobs:
           BASE_SHA: ${{ github.event.before }}
           REQUESTED: ${{ inputs.versions }}
         run: |
-          versions=${REQUESTED:-$(game/changed-versions.sh "$BASE_SHA" "$GITHUB_SHA" | paste -sd' ')}
+          versions=${REQUESTED:-$(nix develop .#game -c game/changed-versions.sh "$BASE_SHA" "$GITHUB_SHA" | paste -sd' ')}
           printf 'versions=%s\n' "$versions" >> "$GITHUB_OUTPUT"
+          # The image has coreutils but no sed or grep, hence nix develop above.
           # hashFiles() is empty on this runner; the downloads follow the versions.
           printf 'cache=%s\n' "$(printf '%s\n' data/defaults/*.txt | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
           printf 'Selected versions: %s\n' "${versions:-none}"
