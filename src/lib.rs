@@ -103,8 +103,10 @@ pub fn versions() -> impl Iterator<Item = Version> {
     DEFAULTS.iter().map(|(name, text)| Version::new(name, text))
 }
 
-pub fn version(name: &str) -> Option<Version> {
-    versions().find(|v| v.name == name)
+pub fn version(name: &str) -> Result<Version, Error> {
+    versions()
+        .find(|v| v.name == name)
+        .ok_or_else(|| Error::UnknownVersion(name.into()))
 }
 
 /// The kind of value an option takes, read off its default.
@@ -171,14 +173,44 @@ fn is_key_name(value: &str) -> bool {
     })
 }
 
-/// A validation error or advisory warning about options.txt.
+/// How much a [`Problem`] matters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    /// For the record: an option left out for a version that lacks it.
+    Note,
+    /// Loads, but likely not as meant.
+    Warning,
+    /// The game would drop it, or discard the whole file.
+    Error,
+}
+
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Severity::Note => "note",
+            Severity::Warning => "warning",
+            Severity::Error => "error",
+        })
+    }
+}
+
+/// Something about an options.txt worth telling.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Problem {
+    pub severity: Severity,
     /// 1-based, where the problem is on one line.
     pub line: Option<usize>,
     pub message: String,
-    /// Advisory only; callers should fail only on problems without this flag.
-    pub warning: bool,
+}
+
+impl Problem {
+    fn new(severity: Severity, line: Option<usize>, message: String) -> Self {
+        Problem {
+            severity,
+            line,
+            message,
+        }
+    }
 }
 
 impl fmt::Display for Problem {
@@ -196,17 +228,11 @@ impl fmt::Display for Problem {
 /// not know are allowed, as mods add their own, but must be key names. Vanilla
 /// drops those on save; this check does not prove that a mod is installed.
 /// Value kinds do not detect every range, enum or graphics-preset conflict.
-/// Entries with [`Problem::warning`] are advisory and must not fail a check.
+/// Only [`Severity::Error`] means the file is broken.
 pub fn check(text: &str, version: &Version) -> Vec<Problem> {
     let mut problems = Vec::new();
     let mut seen: Vec<(&str, usize)> = Vec::new();
-    let mut problem = |line, message: String| {
-        problems.push(Problem {
-            line,
-            message,
-            warning: false,
-        })
-    };
+    let mut problem = |line, message| problems.push(Problem::new(Severity::Error, line, message));
 
     for (n, line) in (1..).zip(text.lines()) {
         let Some((key, value)) = line.split_once(':') else {
@@ -268,11 +294,14 @@ pub fn check(text: &str, version: &Version) -> Vec<Problem> {
         .filter(|p| *p != "\"custom\"" && version.defaults.get("graphicsPreset").is_some())
     {
         for key in PRESET_OVERRIDES.iter().filter(|k| options.get(k).is_some()) {
-            problems.push(Problem {
-                line: None,
-                message: format!("graphicsPreset:{preset} may override {key}; use graphicsPreset:\"custom\" to keep individual settings"),
-                warning: true,
-            });
+            problems.push(Problem::new(
+                Severity::Warning,
+                None,
+                format!(
+                    "graphicsPreset:{preset} may override {key}; use graphicsPreset:\"custom\" \
+                     to keep individual settings"
+                ),
+            ));
         }
     }
     problems
@@ -283,13 +312,13 @@ pub fn check(text: &str, version: &Version) -> Vec<Problem> {
 ///
 /// One set of options serves several versions, so an option this version
 /// lacks, or a value of a kind this version does not take, is left out and
-/// listed in the returned notes. One that NO supported version would take is
-/// a mistake, a typo or a pre-1.13 keybind, and fails the merge.
+/// returned as a [`Severity::Note`]. One that NO supported version would take
+/// is a mistake, a typo or a pre-1.13 keybind, and fails the merge.
 pub fn merge(
     base: &Options,
     layers: &[Options],
     version: &Version,
-) -> Result<(Options, Vec<String>), Vec<Problem>> {
+) -> Result<(Options, Vec<Problem>), Vec<Problem>> {
     let mut merged = base.clone();
     for layer in layers {
         layer.iter().for_each(|(k, v)| merged.set(k, v));
@@ -316,16 +345,20 @@ pub fn merge(
         if fits_here {
             out.set(key, value);
         } else if fits_any(key, value) {
-            notes.push(format!(
-                "{key}:{value} left out: Minecraft {} does not take it",
-                version.name
+            notes.push(Problem::new(
+                Severity::Note,
+                None,
+                format!(
+                    "{key}:{value} left out: Minecraft {} does not take it",
+                    version.name
+                ),
             ));
         } else {
-            problems.push(Problem {
-                line: None,
-                message: format!("{key}:{value} is not an option any supported Minecraft takes"),
-                warning: false,
-            });
+            problems.push(Problem::new(
+                Severity::Error,
+                None,
+                format!("{key}:{value} is not an option any supported Minecraft takes"),
+            ));
         }
     }
     if problems.is_empty() {
@@ -364,6 +397,7 @@ pub fn diff<'a>(a: &'a Options, b: &'a Options) -> Vec<(&'a str, &'a str, Option
 pub enum Error {
     Io(PathBuf, io::Error),
     Invalid(Vec<Problem>),
+    UnknownVersion(String),
 }
 
 impl fmt::Display for Error {
@@ -374,13 +408,22 @@ impl fmt::Display for Error {
                 problems.iter().try_for_each(|p| writeln!(f, "{p}"))?;
                 f.write_str("Minecraft would drop these, or discard the whole options.txt")
             }
+            Error::UnknownVersion(name) => {
+                let known: Vec<_> = versions().map(|v| v.name).collect();
+                write!(
+                    f,
+                    "Minecraft {name} is not supported; known: {}",
+                    known.join(", ")
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for Error {}
 
-fn read(path: &Path) -> Result<String, Error> {
+/// Reads a file, naming it in the error.
+pub fn read(path: &Path) -> Result<String, Error> {
     fs::read_to_string(path).map_err(|e| Error::Io(path.into(), e))
 }
 
@@ -414,8 +457,9 @@ fn files(dir: &Path) -> Result<Vec<PathBuf>, Error> {
 
 /// Lays option directories, each mirroring the game folder, over `out` in
 /// order: `options.txt` merges key by key (see [`merge`]) over `out`'s own,
-/// and every other file replaces `out`'s whole. Returns the merge's notes.
-pub fn apply(out: &Path, sources: &[PathBuf], version: &Version) -> Result<Vec<String>, Error> {
+/// and every other file replaces `out`'s whole. Returns the merge's notes and
+/// the result's warnings; errors fail it.
+pub fn apply(out: &Path, sources: &[PathBuf], version: &Version) -> Result<Vec<Problem>, Error> {
     let target = out.join("options.txt");
     let base = match target.exists() {
         true => Options::parse(&read(&target)?),
@@ -440,17 +484,13 @@ pub fn apply(out: &Path, sources: &[PathBuf], version: &Version) -> Result<Vec<S
     }
     let (merged, mut notes) = merge(&base, &layers, version).map_err(Error::Invalid)?;
     let text = merged.to_string();
-    let mut problems = check(&text, version);
-    notes.extend(
-        problems
-            .iter()
-            .filter(|p| p.warning)
-            .map(|p| format!("warning: {p}")),
-    );
-    problems.retain(|p| !p.warning);
-    if !problems.is_empty() {
-        return Err(Error::Invalid(problems));
+    let (errors, warnings) = check(&text, version)
+        .into_iter()
+        .partition::<Vec<_>, _>(|p| p.severity == Severity::Error);
+    if !errors.is_empty() {
+        return Err(Error::Invalid(errors));
     }
+    notes.extend(warnings);
     write(&target, text)?;
     Ok(notes)
 }
@@ -576,7 +616,7 @@ mod tests {
                 + "graphicsPreset:\"fancy\"\nsimulationDistance:6\nentityDistanceScaling:0.75\n";
             let problems = check(&text, &v);
             assert_eq!(problems.len(), 2, "{name}");
-            assert!(problems.iter().all(|p| p.warning));
+            assert!(problems.iter().all(|p| p.severity == Severity::Warning));
             assert!(check(&text.replace("\"fancy\"", "\"custom\""), &v).is_empty());
             assert!(check(&(valid(&v) + "graphicsPreset:\"fancy\"\n"), &v).is_empty());
         }

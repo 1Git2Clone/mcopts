@@ -1,7 +1,7 @@
-use std::{fs, path::PathBuf, process::ExitCode};
+use std::{path::PathBuf, process::ExitCode};
 
 use clap::{Parser, Subcommand};
-use mcopts::{Options, Version};
+use mcopts::{Error, Options, Severity};
 
 /// Read, check and sync Minecraft options.txt and mod configs.
 #[derive(Parser)]
@@ -45,94 +45,72 @@ enum Command {
     Diff { a: PathBuf, b: PathBuf },
 }
 
-fn version(name: &str) -> Result<Version, String> {
-    mcopts::version(name).ok_or_else(|| {
-        let known: Vec<_> = mcopts::versions().map(|v| v.name).collect();
-        format!(
-            "Minecraft {name} is not supported; known: {}",
-            known.join(", ")
-        )
-    })
-}
-
-fn read(path: &PathBuf) -> Result<String, String> {
-    fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-fn run(cli: Cli) -> Result<bool, String> {
+fn run(cli: Cli) -> Result<ExitCode, Error> {
+    let failed_if = |failed: bool| match failed {
+        true => ExitCode::FAILURE,
+        false => ExitCode::SUCCESS,
+    };
     match cli.command {
         Command::Versions => {
             for v in mcopts::versions() {
                 println!("{}\t{}\t{}", v.name, v.data_version, v.defaults.len());
             }
-            Ok(true)
+            Ok(ExitCode::SUCCESS)
         }
         Command::Check { minecraft, file } => {
-            let problems = mcopts::check(&read(&file)?, &version(&minecraft)?);
+            let problems = mcopts::check(&mcopts::read(&file)?, &mcopts::version(&minecraft)?);
             for p in &problems {
-                eprintln!(
-                    "{}: {}{p}",
-                    file.display(),
-                    if p.warning { "warning: " } else { "" }
-                );
+                eprintln!("{}: {}: {p}", file.display(), p.severity);
             }
-            let failed = problems.iter().any(|p| !p.warning);
+            let failed = problems.iter().any(|p| p.severity == Severity::Error);
             if failed {
                 eprintln!("Minecraft would drop these, or discard the whole options.txt.");
             }
-            Ok(!failed)
+            Ok(failed_if(failed))
         }
         Command::Apply {
             minecraft,
             out,
             sources,
         } => {
-            let notes =
-                mcopts::apply(&out, &sources, &version(&minecraft)?).map_err(|e| e.to_string())?;
-            notes.iter().for_each(|n| {
-                if n.starts_with("warning:") {
-                    eprintln!("{n}");
-                } else {
-                    eprintln!("note: {n}");
-                }
-            });
-            Ok(true)
+            for p in mcopts::apply(&out, &sources, &mcopts::version(&minecraft)?)? {
+                eprintln!("{}: {p}", p.severity);
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Command::Sync {
             instance,
             target,
             except,
         } => {
-            let synced = mcopts::sync(&instance, &target, &except).map_err(|e| e.to_string())?;
+            let synced = mcopts::sync(&instance, &target, &except)?;
             println!(
                 "{} options, {} config files",
                 synced.options,
                 synced.configs.len()
             );
-            synced
-                .configs
-                .iter()
-                .for_each(|c| println!("  {}", c.display()));
-            Ok(true)
+            for c in &synced.configs {
+                println!("  {}", c.display());
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Command::Diff { a, b } => {
-            let (a, b) = (Options::parse(&read(&a)?), Options::parse(&read(&b)?));
+            let (a, b) = (
+                Options::parse(&mcopts::read(&a)?),
+                Options::parse(&mcopts::read(&b)?),
+            );
             let diff = mcopts::diff(&a, &b);
             for (key, ours, theirs) in &diff {
                 println!("{key}: {ours} -> {}", theirs.unwrap_or("(missing)"));
             }
-            Ok(diff.is_empty())
+            Ok(failed_if(!diff.is_empty()))
         }
     }
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::FAILURE,
-        Err(e) => {
-            eprintln!("mcopts: {e}");
-            ExitCode::FAILURE
-        }
-    }
+    run(Cli::parse()).unwrap_or_else(|e| {
+        eprintln!("mcopts: {e}");
+        ExitCode::FAILURE
+    })
 }
