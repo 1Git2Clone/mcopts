@@ -41,6 +41,8 @@ jobs:
         run: |
           versions=${REQUESTED:-$(game/changed-versions.sh "$BASE_SHA" "$GITHUB_SHA" | paste -sd' ')}
           printf 'versions=%s\n' "$versions" >> "$GITHUB_OUTPUT"
+          # hashFiles() is empty on this runner; the downloads follow the versions.
+          printf 'cache=%s\n' "$(printf '%s\n' data/defaults/*.txt | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
           printf 'Selected versions: %s\n' "${versions:-none}"
       - name: Node for the cache action (pinned by flake.lock)
         if: steps.select.outputs.versions != ''
@@ -52,7 +54,7 @@ jobs:
         continue-on-error: true
         with:
           path: ~/.cache/mcopts-game/main
-          key: mcopts-game-${{ runner.os }}-${{ hashFiles('flake.lock', 'data/defaults/*.txt') }}
+          key: mcopts-game-${{ runner.os }}-${{ steps.select.outputs.cache }}
           restore-keys: mcopts-game-${{ runner.os }}-
       - name: Verify
         if: steps.select.outputs.versions != ''
