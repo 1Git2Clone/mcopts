@@ -1,0 +1,57 @@
+name: Game
+
+on:
+  push:
+    branches: ['**']
+    paths: ['data/defaults/**', 'game/**', 'tests/fixtures/**']
+  workflow_dispatch:
+
+concurrency:
+  group: mcopts-game
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: nix
+    timeout-minutes: 60
+    env:
+      NIX_CONFIG: experimental-features = nix-command flakes
+    steps:
+      - name: Checkout
+        env:
+          TOKEN: ${{ github.token }}
+          ORIGIN: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          git init -q -b main .
+          git remote add origin "$ORIGIN"
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          git -c "http.extraHeader=Authorization: Basic $auth" fetch -q origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          git checkout -q --detach "$GITHUB_SHA"
+      - name: Select versions
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.before }}
+        run: |
+          versions=$(game/changed-versions.sh "$BASE_SHA" "$GITHUB_SHA" | paste -sd' ')
+          printf 'versions=%s\n' "$versions" >> "$GITHUB_OUTPUT"
+          printf 'Selected versions: %s\n' "${versions:-none}"
+      - name: Node for the cache action (pinned by flake.lock)
+        if: steps.select.outputs.versions != ''
+        run: |
+          node=$(nix shell --inputs-from . nixpkgs#nodejs -c sh -c 'command -v node')
+          dirname "$node" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        if: steps.select.outputs.versions != ''
+        continue-on-error: true
+        with:
+          path: ~/.cache/mcopts-game/main
+          key: mcopts-game-${{ runner.os }}-${{ hashFiles('flake.lock', 'data/defaults/*.txt') }}
+          restore-keys: mcopts-game-${{ runner.os }}-
+      - name: Verify
+        if: steps.select.outputs.versions != ''
+        env:
+          VERSIONS: ${{ steps.select.outputs.versions }}
+        run: |
+          read -r -a versions <<< "$VERSIONS"
+          nix develop .#game -c game/verify.sh "${versions[@]}"

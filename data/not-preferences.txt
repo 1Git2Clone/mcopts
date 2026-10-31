@@ -1,0 +1,41 @@
+# Mod config files that are NOT a player's preferences, so `mcopts sync` leaves
+# them out: mod internals and compatibility fixes, which follow the pack;
+# server, common and worldgen settings, which are the server's or the world's;
+# caches and generated files. One pattern per line, matched as a substring of
+# the path under the game folder (config/...), case-sensitively. A file that
+# matches none is a preference.
+
+# Mod internals and compatibility fixes
+mixin
+fabric_loader_dependencies
+forgeconfigapiport
+iris-excluded
+indigo-renderer
+lithium.properties
+sodium-extra.properties
+cardinal-components
+
+# The server's or the world's
+server
+common
+worldgen
+c2me.toml
+config/chunky/
+config/spark/
+tectonic
+terralith
+lithostitched
+towns_and_towers
+vanilla_structures
+cristellib
+config/streamsreflowing.properties
+config/streamsreflowing/
+
+# Caches, generated and documentation files
+config/yosbr/
+.dat
+README
+GUIDE
+etf_warnings
+xaeropatreon
+sodium-fingerprint

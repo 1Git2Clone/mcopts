@@ -1,0 +1,26 @@
+name: CI
+
+on: [push, workflow_dispatch]
+
+jobs:
+  check:
+    runs-on: nix
+    env:
+      NIX_CONFIG: experimental-features = nix-command flakes
+    steps:
+      # The nix image has no node for actions/checkout.
+      - name: Checkout
+        env:
+          TOKEN: ${{ github.token }}
+          ORIGIN: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          git init -q -b main .
+          git remote add origin "$ORIGIN"
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          git -c "http.extraHeader=Authorization: Basic $auth" fetch -q origin \
+            '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          git checkout -q --detach "$GITHUB_SHA"
+      - name: Format and lint
+        run: nix flake check --print-build-logs
+      - name: Test
+        run: nix develop -c cargo test
