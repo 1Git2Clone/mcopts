@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       versions:
-        description: Versions to verify, space-separated; empty for all
+        description: Versions to verify, space-separated; empty for the oldest and newest
         required: false
         default: ''
 
@@ -18,8 +18,7 @@ concurrency:
 jobs:
   verify:
     runs-on: nix
-    # A full run is ~34 launches on llvmpipe plus a cold 1.6 GB download.
-    timeout-minutes: 180
+    timeout-minutes: 60
     env:
       NIX_CONFIG: experimental-features = nix-command flakes
     steps:

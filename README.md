@@ -55,9 +55,10 @@ keys in those versions. Verification still fails on changed vanilla values.
 Game files are cached in `~/.cache/mcopts-game`.
 
 Forgejo CI runs `nix flake check` and `cargo test` on every push, including
-tags. A separate game workflow verifies changed defaults only, or all
-versions when `game/` or the options fixture changes, or it is dispatched
-manually. It uses `tests/fixtures/hutao`, a copy of hutao/vps's options (vps
+tags. A separate game workflow verifies the versions whose defaults changed;
+for anything else (`game/` or the options fixture changed, a manual run) it
+verifies the oldest and newest, which cover both launch paths. All 17 is a
+local `game/verify.sh`. It uses `tests/fixtures/hutao`, a copy of hutao/vps's options (vps
 checks its live ones with `mcopts check` in its own build), and caches game
 downloads when the runner supports caching.
 The game workflow does not gate releases.

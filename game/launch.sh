@@ -79,6 +79,7 @@ if ours; then
 fi
 if [ $status -ne 0 ]; then
   echo "$v: did not load and quit cleanly; see $dir/launch.log" >&2
+  tail -n 30 "$dir/launch.log" >&2
   exit 1
 fi
 echo "$v: quit cleanly; options.txt: $(test -f "$dir/options.txt" && grep -c : "$dir/options.txt" || echo none)"

@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# Versions to verify for a push; no base (manual/initial push) means all.
+# Versions for CI to verify. Never all 17 (that's a local game/verify.sh):
+# a changed data/defaults/<v>.txt verifies <v>; anything else, the oldest and
+# newest, which cover both launch paths (JDK 21 + GLFW, JDK 25 + SDL/EGL).
 set -eu
 base=${1-}
 head=${2:-HEAD}
-all() { printf '%s\n' data/defaults/*.txt | sed 's|.*/||;s/\.txt$//' | sort -V; }
-if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-  all
+ends() {
+  printf '%s\n' data/defaults/*.txt | sed 's|.*/||;s/\.txt$//' | sort -V | sed -n '1p;$p'
+}
+# A new branch's push gives no usable base (empty, zeros, or the head itself).
+if [ -z "$base" ] || [ "$(git rev-parse -q --verify "$base^{commit}")" = "$(git rev-parse "$head")" ] ||
+  ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+  ends
 else
   changed=$(git diff --name-only --no-renames "$base" "$head")
   if grep -qE '^(game|tests/fixtures)/' <<<"$changed"; then
-    all
+    ends
   else
     while IFS= read -r path; do
       case $path in

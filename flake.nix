@@ -88,6 +88,9 @@
               # Unwrapped: the wrapper puts the host's /run/opengl-driver
               # first, whose Mesa needs the host's glibc, not this one.
               pkgs.portablemc.unwrapped
+              # pgrep and setsid: CI runs this shell in a bare nixos/nix image.
+              pkgs.procps
+              pkgs.util-linux
               pkgs.xvfb-run
               (pkgs.python3.withPackages (ps: [ ps.xlib ]))
             ];
