@@ -1,0 +1,88 @@
+# Ships mcopts when a `v<version>` tag is pushed: crates.io first, then a
+# Forgejo release whose body is the annotated tag's message. `release` needs
+# `check`, so a tag whose CI fails never ships.
+#
+# Forgejo only, with no GitHub twin: the mirror receives the same tags, and
+# two workflows publishing one version would race each other to crates.io.
+#
+# Needs the CARGO_REGISTRY_TOKEN repo secret (a crates.io token scoped to
+# publish-new and publish-update on mcopts) and RELEASE_TOKEN (a Forgejo token
+# with repository write on mcopts; the job's own token is read-only here).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: CI on the tag
+    runs-on: nix-node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag matches the crate version
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ "$want" != "$have" ]; then
+            echo "tag says $want, Cargo.toml says $have"
+            exit 1
+          fi
+
+      - run: nix develop -c cargo clippy --all-targets -- -D warnings
+
+      # The package runs `cargo test` in its checkPhase.
+      - run: nix build --print-build-logs
+
+      # What crates.io will get builds and tests on its own, outside the repo.
+      - run: nix develop -c cargo publish --dry-run
+
+  release:
+    needs: check
+    runs-on: nix-node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Each step skips what is already done, so a re-run after a later
+      # failure does not trip over an earlier success.
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if curl -sf -A "mcopts release CI" \
+              "https://crates.io/api/v1/crates/mcopts/$version" >/dev/null; then
+            echo "mcopts $version is already on crates.io"
+          else
+            nix develop -c cargo publish
+          fi
+
+      - name: Forgejo release
+        env:
+          TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          api="$GITHUB_SERVER_URL/api/v1/repos/$GITHUB_REPOSITORY"
+          tag="$GITHUB_REF_NAME"
+          auth="Authorization: token $TOKEN"
+          if curl -sf -H "$auth" "$api/releases/tags/$tag" >/dev/null; then
+            echo "release $tag already exists"
+            exit 0
+          fi
+          # The notes come from the checked-out tag, not the API.
+          if [ "$(git cat-file -t "$tag")" != tag ]; then
+            echo "$tag is not an annotated tag, so it has no release notes"
+            exit 1
+          fi
+          nix shell nixpkgs#jq -c jq -n --arg tag "$tag" --arg name "mcopts $tag" \
+            --arg body "$(git tag -l --format='%(contents:body)' "$tag")" \
+            '{tag_name: $tag, name: $name, body: $body}' |
+            curl -s --fail-with-body -X POST -H "$auth" -H "Content-Type: application/json" \
+              --data @- "$api/releases"

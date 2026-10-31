@@ -5,6 +5,12 @@ edition = "2024"
 rust-version = "1.85"
 description = "A library for managing your Minecraft options"
 license = "MIT"
+repository = "https://git.hu-tao.dev/hutao/mcopts"
+readme = "README.md"
+keywords = ["minecraft", "options", "config", "modpack"]
+categories = ["command-line-utilities", "game-development"]
+# The crate itself: build.rs embeds data/; game/ needs a Minecraft client.
+include = ["/src", "/build.rs", "/data", "/tests/cli.rs", "/README.md", "/LICENSE"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
