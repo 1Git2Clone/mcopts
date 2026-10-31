@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{Parser, Subcommand};
-use mcopts::{Error, Options, Severity};
+use mcopts::{Checked, Error, Options};
 
 /// Read, check and sync Minecraft options.txt and mod configs.
 #[derive(Parser)]
@@ -58,11 +58,14 @@ fn run(cli: Cli) -> Result<ExitCode, Error> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Check { minecraft, file } => {
-            let problems = mcopts::check(&mcopts::read(&file)?, &mcopts::version(&minecraft)?);
+            let version = mcopts::version(&minecraft)?;
+            let (problems, failed) = match Checked::parse(&mcopts::read(&file)?, version) {
+                Ok(checked) => (checked.warnings().to_vec(), false),
+                Err(problems) => (problems, true),
+            };
             for p in &problems {
-                eprintln!("{}: {}: {p}", file.display(), p.severity);
+                eprintln!("{}: {p}", file.display());
             }
-            let failed = problems.iter().any(|p| p.severity == Severity::Error);
             if failed {
                 eprintln!("Minecraft would drop these, or discard the whole options.txt.");
             }
@@ -73,8 +76,8 @@ fn run(cli: Cli) -> Result<ExitCode, Error> {
             out,
             sources,
         } => {
-            for p in mcopts::apply(&out, &sources, &mcopts::version(&minecraft)?)? {
-                eprintln!("{}: {p}", p.severity);
+            for p in mcopts::apply(&out, &sources, mcopts::version(&minecraft)?)? {
+                eprintln!("{p}");
             }
             Ok(ExitCode::SUCCESS)
         }
